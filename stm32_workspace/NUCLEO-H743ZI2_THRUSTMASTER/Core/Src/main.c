@@ -47,6 +47,9 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+// Global buffer for processed throttle data
+//volatile JoystickData_t g_joystickData;
+volatile ThrottleData_t g_throttleData;
 
 /* USER CODE END PV */
 
@@ -62,8 +65,22 @@ void MX_USB_HOST_Process(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 void USBH_HID_EventCallback(USBH_HandleTypeDef *phost) {
-    uint8_t ui8Debug = 0; // Set breakpoint here to check if the function is called
-    (void)ui8Debug;
+    HID_HandleTypeDef *HID_Handle = (HID_HandleTypeDef *)phost->pActiveClass->pData;
+    uint8_t *current = HID_Handle->pData;
+
+    // Only process new reports (compare first 16 bytes)
+    static uint8_t last_report[THROTTLE_REPORT_EFFECTIVE_SIZE];
+
+    if (memcmp(current, last_report, THROTTLE_REPORT_EFFECTIVE_SIZE) != 0) {
+        memcpy(last_report, current, THROTTLE_REPORT_EFFECTIVE_SIZE);
+
+        ThrottleData_t data = USBH_HID_GetThrottleData(current);
+
+        // Atomically update the global buffer
+        __disable_irq();
+        g_throttleData = data;
+        __enable_irq();
+    }
 }
 
 /* USER CODE END 0 */
