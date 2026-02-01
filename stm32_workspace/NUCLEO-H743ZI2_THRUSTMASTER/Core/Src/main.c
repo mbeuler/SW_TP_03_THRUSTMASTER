@@ -25,6 +25,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usbh_hid.h"
+#include "usbh_hid_throttle.h"
 
 /* USER CODE END Includes */
 
