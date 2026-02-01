@@ -59,6 +59,7 @@ static void MPU_Config(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
+void uint16_to_padded_str(uint16_t value, char *str);
 
 /* USER CODE END PFP */
 
@@ -93,6 +94,26 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  uint32_t lastPrint = 0;
+
+  //JoystickData_t localCopyJoystick;
+  ThrottleData_t localCopyThrottle;
+
+  char xStr[6], yStr[6], msg[40];
+  char zStr[6], sStr[6];
+  int k;
+
+  // Initialize global buffer
+  g_throttleData.x = 0;
+  g_throttleData.y = 0;
+  g_throttleData.slider = 0;
+  g_throttleData.z = 0;
+  g_throttleData.rz = 0;
+
+  for (int i = 0; i < 32; i++) {
+	  g_throttleData.buttons[i] = 0;
+  }
+  g_throttleData.hat_switch = 8;
 
   /* USER CODE END 1 */
 
@@ -132,6 +153,39 @@ int main(void)
     MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
+    // Print every 250ms
+    if (HAL_GetTick() - lastPrint >= 250) {
+    	lastPrint = HAL_GetTick();
+
+        // Copy throttle data atomically
+        __disable_irq();
+        //localCopyJoystick = g_joystickData;
+        localCopyThrottle = g_throttleData;
+        __enable_irq();
+
+        uint16_to_padded_str(localCopyThrottle.z, zStr);
+        uint16_to_padded_str(localCopyThrottle.x, xStr);
+        uint16_to_padded_str(localCopyThrottle.y, yStr);
+        uint16_to_padded_str(localCopyThrottle.slider, sStr);
+
+        // Put message together: "Z:xxxxx X:yyyyy Y:yyyyy S:yyyyy\r\n"
+        k = 0;
+        msg[k++] = 'Z'; msg[k++] = ':';
+        for (int i = 0; i < 5; i++) msg[k++] = zStr[i];
+        msg[k++] = ' ';
+        msg[k++] = 'X'; msg[k++] = ':';
+        for (int i = 0; i < 5; i++) msg[k++] = xStr[i];
+        msg[k++] = ' ';
+        msg[k++] = 'Y'; msg[k++] = ':';
+        for (int i = 0; i < 5; i++) msg[k++] = yStr[i];
+        msg[k++] = ' ';
+        msg[k++] = 'S'; msg[k++] = ':';
+        for (int i = 0; i < 5; i++) msg[k++] = sStr[i];
+        msg[k++] = '\r'; msg[k++] = '\n';
+        msg[k] = '\0';
+
+        HAL_UART_Transmit(&huart3, (uint8_t*)msg, k, 100);
+    }
   }
   /* USER CODE END 3 */
 }
@@ -195,6 +249,30 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void uint16_to_padded_str(uint16_t value, char *str) {
+    // Temporary buffer for the numeric characters (max. 5 digits + null terminator)
+    char temp[6];
+    int i = 0;
+
+    // Convert the number into the temp buffer (stored in reverse order)
+    do {
+        temp[i++] = (value % 10) + '0';
+        value /= 10;
+    } while (value > 0 && i < 5);
+
+    // Pad with spaces if the number has fewer than 5 digits
+    while (i < 5) {
+        temp[i++] = ' ';
+    }
+
+    // Reverse the content of temp into the output string (fixed width: 5 chars)
+    for (int j = 0; j < 5; j++) {
+        str[j] = temp[4 - j];
+    }
+
+    // Null‑terminate the result
+    str[5] = '\0';
+}
 
 /* USER CODE END 4 */
 
