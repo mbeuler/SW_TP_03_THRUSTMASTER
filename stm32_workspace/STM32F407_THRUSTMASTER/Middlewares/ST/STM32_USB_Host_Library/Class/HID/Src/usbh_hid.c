@@ -106,6 +106,7 @@ static void USBH_HID_ParseHIDDesc(HID_DescTypeDef *desc, uint8_t *buf);
 
 extern USBH_StatusTypeDef USBH_HID_MouseInit(USBH_HandleTypeDef *phost);
 extern USBH_StatusTypeDef USBH_HID_KeybdInit(USBH_HandleTypeDef *phost);
+extern USBH_StatusTypeDef USBH_HID_JoystickInit(USBH_HandleTypeDef *phost); // HID patch
 
 USBH_ClassTypeDef  HID_Class =
 {
@@ -143,7 +144,8 @@ static USBH_StatusTypeDef USBH_HID_InterfaceInit(USBH_HandleTypeDef *phost)
   uint8_t num = 0U;
   uint8_t interface;
 
-  interface = USBH_FindInterface(phost, phost->pActiveClass->ClassCode, HID_BOOT_CODE, 0xFFU);
+  //interface = USBH_FindInterface(phost, phost->pActiveClass->ClassCode, HID_BOOT_CODE, 0xFFU);
+  interface = USBH_FindInterface(phost, phost->pActiveClass->ClassCode, 0xFFU, 0xFFU); // HID patch
 
   if ((interface == 0xFFU) || (interface >= USBH_MAX_NUM_INTERFACES)) /* No Valid Interface */
   {
@@ -185,8 +187,12 @@ static USBH_StatusTypeDef USBH_HID_InterfaceInit(USBH_HandleTypeDef *phost)
   }
   else
   {
-    USBH_UsrLog("Protocol not supported.");
-    return USBH_FAIL;
+    //USBH_UsrLog("Protocol not supported.");
+    //return USBH_FAIL;
+	USBH_UsrLog("Unknown HID device (e.g. Joystick) found!"); // HID patch
+	HID_Handle->HIDType = HID_UNKNOWN;
+	HID_Handle->Init = USBH_HID_JoystickInit; // Init function for joystick
+	// Important: Initialization will not be aborted!
   }
 
   HID_Handle->state     = USBH_HID_INIT;
@@ -378,6 +384,16 @@ static USBH_StatusTypeDef USBH_HID_Process(USBH_HandleTypeDef *phost)
   HID_HandleTypeDef *HID_Handle = (HID_HandleTypeDef *) phost->pActiveClass->pData;
   uint32_t XferSize;
 
+  uint8_t ui8Debug_Array[8], ui8Debug;
+
+  for (int i = 0; i < 8; i++) {
+	  ui8Debug_Array[i] = HID_Handle->pData[i];
+  }
+
+  ui8Debug = 0;         // Set breakpoint here (Debugger: look also at HID_Handle->state)
+  (void)ui8Debug_Array; // Avoid compiler warning
+  (void)ui8Debug;       // Avoid compiler warning
+
   switch (HID_Handle->state)
   {
     case USBH_HID_INIT:
@@ -399,30 +415,56 @@ static USBH_StatusTypeDef USBH_HID_Process(USBH_HandleTypeDef *phost)
 #endif /* (USBH_USE_OS == 1U) */
       break;
 
-    case USBH_HID_IDLE:
-      status = USBH_HID_GetReport(phost, 0x01U, 0U, HID_Handle->pData, (uint8_t)HID_Handle->length);
+    case USBH_HID_IDLE:  // HID patch
+//      status = USBH_HID_GetReport(phost, 0x01U, 0U, HID_Handle->pData, (uint8_t)HID_Handle->length);
+//
+//      if (status == USBH_OK)
+//      {
+//        HID_Handle->state = USBH_HID_SYNC;
+//      }
+//      else if (status == USBH_BUSY)
+//      {
+//        HID_Handle->state = USBH_HID_IDLE;
+//        status = USBH_OK;
+//      }
+//      else if (status == USBH_NOT_SUPPORTED)
+//      {
+//        HID_Handle->state = USBH_HID_SYNC;
+//        status = USBH_OK;
+//      }
+//      else
+//      {
+//        HID_Handle->state = USBH_HID_ERROR;
+//        status = USBH_FAIL;
+//      }
 
-      if (status == USBH_OK)
-      {
-        HID_Handle->state = USBH_HID_SYNC;
+      // Start an Interrupt-IN transfer to receive the next HID report
+      status = USBH_InterruptReceiveData(phost, HID_Handle->pData,
+    	                                 (uint8_t)HID_Handle->length,
+    	                                 HID_Handle->InPipe);
+
+      // If the Interrupt-IN transfer could not be started, this is likely a rare or critical error.
+      // Optionally, a debug log or error counter can be added here to help with troubleshooting.
+      if (status != USBH_OK) {
+          // Optional: Add debug log or error counter here.
+    	  // Example: USBH_ErrLog("InterruptReceiveData failed in HID_IDLE state");
+    	  HID_Handle->state = USBH_HID_ERROR;
       }
-      else if (status == USBH_BUSY)
-      {
-        HID_Handle->state = USBH_HID_IDLE;
-        status = USBH_OK;
-      }
-      else if (status == USBH_NOT_SUPPORTED)
-      {
-        HID_Handle->state = USBH_HID_SYNC;
-        status = USBH_OK;
-      }
-      else
-      {
-        HID_Handle->state = USBH_HID_ERROR;
-        status = USBH_FAIL;
-      }
+
+      // Transition immediately to the POLL state, where the middleware will wait
+      // for the completion of the Interrupt-IN transfer and process the received data.
+      HID_Handle->state = USBH_HID_POLL;
+
+      // Store the current host timer value. This can be used for timeout handling
+      // or to measure the polling interval, depending on the rest of the middleware logic.
+      HID_Handle->timer = phost->Timer;
+
+      // Clear the DataReady flag to indicate that new data is expected.
+      // This flag will be set once valid data has been received and processed.
+      HID_Handle->DataReady = 0U;
 
 #if (USBH_USE_OS == 1U)
+      // If an RTOS is used, notify the USB host task that a new event has occurred.
       USBH_OS_PutMessage(phost, USBH_URB_EVENT, 0U, 0U);
 #endif /* (USBH_USE_OS == 1U) */
       break;

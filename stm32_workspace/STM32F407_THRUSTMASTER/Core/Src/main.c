@@ -25,6 +25,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usbh_hid.h"
+#include "usbh_hid_joystick.h"
 
 /* USER CODE END Includes */
 
@@ -46,6 +47,8 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+// Global buffer for processed joystick data
+volatile JoystickData_t g_joystickData;
 
 /* USER CODE END PV */
 
@@ -54,11 +57,30 @@ void SystemClock_Config(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
+void uint16_to_padded_str(uint16_t value, char *str);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void USBH_HID_EventCallback(USBH_HandleTypeDef *phost) {
+    HID_HandleTypeDef *HID_Handle = (HID_HandleTypeDef *)phost->pActiveClass->pData;
+    uint8_t *current = HID_Handle->pData;
+
+    // Only process new reports (compare first 8 bytes)
+    static uint8_t last_report[JOYSTICK_REPORT_EFFECTIVE_SIZE];
+
+    if (memcmp(current, last_report, JOYSTICK_REPORT_EFFECTIVE_SIZE) != 0) {
+        memcpy(last_report, current, JOYSTICK_REPORT_EFFECTIVE_SIZE);
+
+        JoystickData_t data = USBH_HID_GetJoystickData(current);
+
+        // Atomically update the global buffer
+        __disable_irq();
+        g_joystickData = data;
+        __enable_irq();
+    }
+}
 
 /* USER CODE END 0 */
 
@@ -70,6 +92,21 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  uint32_t lastPrint = 0;
+
+  JoystickData_t localCopyJoystick;
+
+  char xStr[6], yStr[6], msg[40];
+  int k;
+
+  // Initialize global buffer
+  g_joystickData.x = 0;
+  g_joystickData.y = 0;
+
+  for (int i = 0; i < 19; i++) {
+	  g_joystickData.buttons[i] = 0;
+  }
+  g_joystickData.hat_switch = 8;
 
   /* USER CODE END 1 */
 
@@ -106,6 +143,30 @@ int main(void)
     MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
+    // Print every 250ms
+    if (HAL_GetTick() - lastPrint >= 250) {
+    	lastPrint = HAL_GetTick();
+
+        // Copy joystick data atomically
+        __disable_irq();
+        localCopyJoystick = g_joystickData;
+        __enable_irq();
+
+        uint16_to_padded_str(localCopyJoystick.x, xStr);
+        uint16_to_padded_str(localCopyJoystick.y, yStr);
+
+        // Put message together: "X:xxxxx Y:yyyyy\r\n"
+        k = 0;
+        msg[k++] = 'X'; msg[k++] = ':';
+        for (int i = 0; i < 5; i++) msg[k++] = xStr[i];
+        msg[k++] = ' ';
+        msg[k++] = 'Y'; msg[k++] = ':';
+        for (int i = 0; i < 5; i++) msg[k++] = yStr[i];
+        msg[k++] = '\r'; msg[k++] = '\n';
+        msg[k] = '\0';
+
+        HAL_UART_Transmit(&huart2, (uint8_t*)msg, k, 100);
+    }
   }
   /* USER CODE END 3 */
 }
@@ -156,6 +217,30 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void uint16_to_padded_str(uint16_t value, char *str) {
+    // Temporary buffer for the numeric characters (max. 5 digits + null terminator)
+    char temp[6];
+    int i = 0;
+
+    // Convert the number into the temp buffer (stored in reverse order)
+    do {
+        temp[i++] = (value % 10) + '0';
+        value /= 10;
+    } while (value > 0 && i < 5);
+
+    // Pad with spaces if the number has fewer than 5 digits
+    while (i < 5) {
+        temp[i++] = ' ';
+    }
+
+    // Reverse the content of temp into the output string (fixed width: 5 chars)
+    for (int j = 0; j < 5; j++) {
+        str[j] = temp[4 - j];
+    }
+
+    // Null‑terminate the result
+    str[5] = '\0';
+}
 
 /* USER CODE END 4 */
 
